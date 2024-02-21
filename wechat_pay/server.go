@@ -6,29 +6,29 @@ import (
 	"github.com/wechatpay-apiv3/wechatpay-go/core"
 	"github.com/wechatpay-apiv3/wechatpay-go/core/consts"
 	"github.com/wechatpay-apiv3/wechatpay-go/core/option"
+	"github.com/wechatpay-apiv3/wechatpay-go/services/certificates"
+	"github.com/wechatpay-apiv3/wechatpay-go/services/payments"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/native"
 	"github.com/wechatpay-apiv3/wechatpay-go/utils"
 	"log"
 	nethttp "net/http"
 	neturl "net/url"
 	"time"
+	"wechat-pay/conf"
 )
 
-var (
-	mchID                      string = "1664078490"                               // 商户号
-	mchCertificateSerialNumber string = "1EAE32CB449BA76FD6FF5409D168188F65163832" // 商户证书序列号
-	mchAPIv3Key                string = "OsL1e9iL9e1i0Z2e1n5g0W5a19Y0u4n0"         // 商户APIv3密钥
-	appid                      string = "wx64dd1e99a571addc"
-	clientKeyPath              string = "/Users/fanbingxin/develop/go/src/code.corp.elong.com/aos/vue-wechat-pay/wechat_pay/business_cert/apiclient_key.pem"
-)
+type PrepayRes struct {
+	CodeUrl string `json:"code_url"`
+	TradeNo string `json:"trade_no"`
+}
 
 func GetTradeNo() string {
 	return fmt.Sprint(time.Now().UnixMilli()) + time.Now().Local().Format("060102150405")
 }
 
-func Prepay(amount int) string {
+func PrepayTest(amount int) *PrepayRes {
 	// 使用 utils 提供的函数从本地文件中加载商户私钥，商户私钥会用来生成请求的签名
-	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(clientKeyPath)
+	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(conf.Conf.ClientKeyPath)
 	if err != nil {
 		log.Print("load merchant private key error")
 	}
@@ -36,7 +36,7 @@ func Prepay(amount int) string {
 	ctx := context.Background()
 	// 使用商户私钥等初始化 client，并使它具有自动定时获取微信支付平台证书的能力
 	opts := []core.ClientOption{
-		option.WithWechatPayAutoAuthCipher(mchID, mchCertificateSerialNumber, mchPrivateKey, mchAPIv3Key),
+		option.WithWechatPayAutoAuthCipher(conf.Conf.MchID, conf.Conf.MchCertificateSerialNumber, mchPrivateKey, conf.Conf.MchAPIv3Key),
 	}
 	client, err := core.NewClient(ctx, opts...)
 	if err != nil {
@@ -44,17 +44,16 @@ func Prepay(amount int) string {
 	}
 
 	tradeno := GetTradeNo()
-	fmt.Println("dingdanhao:", tradeno)
 	svc := native.NativeApiService{Client: client}
 	resp, result, err := svc.Prepay(ctx,
 		native.PrepayRequest{
-			Appid:         core.String(appid),
-			Mchid:         core.String(mchID),
+			Appid:         core.String(conf.Conf.Appid),
+			Mchid:         core.String(conf.Conf.MchID),
 			Description:   core.String("小臭臭"),
 			OutTradeNo:    core.String(tradeno),
 			TimeExpire:    core.Time(time.Now()),
 			Attach:        core.String("小肉肉"),
-			NotifyUrl:     core.String("http://192.168.0.111:8181/ping"),
+			NotifyUrl:     core.String(conf.Conf.PayNotify),
 			GoodsTag:      core.String("WXG"),
 			SupportFapiao: core.Bool(false),
 			Amount: &native.Amount{
@@ -95,14 +94,94 @@ func Prepay(amount int) string {
 		// 处理返回结果
 		log.Printf("status=%d resp=%s", result.Response.StatusCode, resp)
 	}
-	return *resp.CodeUrl
+	return &PrepayRes{
+		CodeUrl: *resp.CodeUrl,
+		TradeNo: tradeno,
+	}
+}
+
+func Prepay(order *CreateOrderReq) *PrepayRes {
+	// 使用 utils 提供的函数从本地文件中加载商户私钥，商户私钥会用来生成请求的签名
+	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(conf.Conf.ClientKeyPath)
+	if err != nil {
+		log.Print("load merchant private key error")
+	}
+
+	ctx := context.Background()
+	// 使用商户私钥等初始化 client，并使它具有自动定时获取微信支付平台证书的能力
+	opts := []core.ClientOption{
+		option.WithWechatPayAutoAuthCipher(conf.Conf.MchID, conf.Conf.MchCertificateSerialNumber, mchPrivateKey, conf.Conf.MchAPIv3Key),
+	}
+	client, err := core.NewClient(ctx, opts...)
+	if err != nil {
+		log.Printf("new wechat pay client err:%s", err)
+	}
+
+	tradeno := order.OutTradeNo
+	if tradeno == "" {
+		tradeno = GetTradeNo()
+	}
+	svc := native.NativeApiService{Client: client}
+	nativePrepayReq := native.PrepayRequest{
+		Appid:         core.String(conf.Conf.Appid),
+		Mchid:         core.String(conf.Conf.MchID),
+		Description:   core.String(order.Description),
+		OutTradeNo:    core.String(tradeno),
+		TimeExpire:    core.Time(time.Now()),
+		Attach:        core.String(order.Attach),
+		NotifyUrl:     core.String(conf.Conf.PayNotify),
+		GoodsTag:      core.String(order.GoodsTag),
+		SupportFapiao: core.Bool(false),
+		Amount: &native.Amount{
+			Currency: core.String("CNY"),
+			Total:    core.Int64(int64(order.Amount.Total)),
+		},
+		SettleInfo: &native.SettleInfo{
+			ProfitSharing: core.Bool(order.SettleInfo.ProfitSharing),
+		},
+		SceneInfo: &native.SceneInfo{
+			DeviceId:      core.String(order.SceneInfo.DeviceID),
+			PayerClientIp: core.String(order.SceneInfo.PayerClientIP),
+			StoreInfo: &native.StoreInfo{
+				Address:  core.String(order.SceneInfo.StoreInfo.Address),
+				AreaCode: core.String(order.SceneInfo.StoreInfo.AreaCode),
+				Id:       core.String(order.SceneInfo.StoreInfo.ID),
+				Name:     core.String(order.SceneInfo.StoreInfo.Name),
+			},
+		},
+	}
+	nativePrepayReq.Detail = &native.Detail{
+		GoodsDetail: make([]native.GoodsDetail, 0),
+	}
+	for _, v := range order.Detail.GoodsDetail {
+		nativePrepayReq.Detail.GoodsDetail = append(nativePrepayReq.Detail.GoodsDetail, native.GoodsDetail{
+			GoodsName:        core.String(v.GoodsName),
+			MerchantGoodsId:  core.String(v.MerchantGoodsID),
+			Quantity:         core.Int64(v.Quantity),
+			UnitPrice:        core.Int64(v.UnitPrice),
+			WechatpayGoodsId: core.String(v.WechatpayGoodsID),
+		})
+	}
+	resp, result, err := svc.Prepay(ctx, nativePrepayReq)
+
+	if err != nil {
+		// 处理错误
+		log.Printf("call Prepay err:%s", err)
+	} else {
+		// 处理返回结果
+		log.Printf("status=%d resp=%s", result.Response.StatusCode, resp)
+	}
+	return &PrepayRes{
+		CodeUrl: *resp.CodeUrl,
+		TradeNo: tradeno,
+	}
 }
 
 func Refund(tradNo string, amount int) *RefundResp {
 	resp, _, err := RefundPay(&RefundReq{
 		OutRefundNo: tradNo,
 		OutTradeNo:  tradNo,
-		Amount: Amount{
+		Amount: Amount1{
 			Refund:   amount,
 			Total:    amount,
 			Currency: "CNY",
@@ -116,7 +195,7 @@ func Refund(tradNo string, amount int) *RefundResp {
 
 func Close(tradeNo string) string {
 	// 使用 utils 提供的函数从本地文件中加载商户私钥，商户私钥会用来生成请求的签名
-	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(clientKeyPath)
+	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(conf.Conf.ClientKeyPath)
 	if err != nil {
 		log.Print("load merchant private key error")
 	}
@@ -124,7 +203,7 @@ func Close(tradeNo string) string {
 	ctx := context.Background()
 	// 使用商户私钥等初始化 client，并使它具有自动定时获取微信支付平台证书的能力
 	opts := []core.ClientOption{
-		option.WithWechatPayAutoAuthCipher(mchID, mchCertificateSerialNumber, mchPrivateKey, mchAPIv3Key),
+		option.WithWechatPayAutoAuthCipher(conf.Conf.MchID, conf.Conf.MchCertificateSerialNumber, mchPrivateKey, conf.Conf.MchAPIv3Key),
 	}
 	client, err := core.NewClient(ctx, opts...)
 	if err != nil {
@@ -135,7 +214,7 @@ func Close(tradeNo string) string {
 	result, err := svc.CloseOrder(ctx,
 		native.CloseOrderRequest{
 			OutTradeNo: core.String(tradeNo),
-			Mchid:      core.String(mchID),
+			Mchid:      core.String(conf.Conf.MchID),
 		},
 	)
 
@@ -150,13 +229,66 @@ func Close(tradeNo string) string {
 	}
 }
 
-type RefundReq struct {
-	OutRefundNo string `json:"out_refund_no"`
-	OutTradeNo  string `json:"out_trade_no"`
-	Amount      Amount `json:"amount"`
+func Query(tradeNo string) *payments.Transaction {
+	// 使用 utils 提供的函数从本地文件中加载商户私钥，商户私钥会用来生成请求的签名
+	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(conf.Conf.ClientKeyPath)
+	if err != nil {
+		log.Print("load merchant private key error")
+	}
+
+	ctx := context.Background()
+	// 使用商户私钥等初始化 client，并使它具有自动定时获取微信支付平台证书的能力
+	opts := []core.ClientOption{
+		option.WithWechatPayAutoAuthCipher(conf.Conf.MchID, conf.Conf.MchCertificateSerialNumber, mchPrivateKey, conf.Conf.MchAPIv3Key),
+	}
+	client, err := core.NewClient(ctx, opts...)
+	if err != nil {
+		log.Printf("new wechat pay client err:%s", err)
+	}
+
+	svc := native.NativeApiService{Client: client}
+	resp, _, err := svc.QueryOrderByOutTradeNo(ctx, native.QueryOrderByOutTradeNoRequest{
+		OutTradeNo: core.String(tradeNo),
+		Mchid:      core.String(conf.Conf.MchID),
+	})
+	if err != nil {
+		fmt.Println("查询订单出错啦！", err)
+	}
+	return resp
 }
 
-type Amount struct {
+func DownloadCerts() *certificates.DownloadCertificatesResponse {
+	// 使用 utils 提供的函数从本地文件中加载商户私钥，商户私钥会用来生成请求的签名
+	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(conf.Conf.ClientKeyPath)
+	if err != nil {
+		log.Fatal("load merchant private key error")
+	}
+
+	ctx := context.Background()
+	// 使用商户私钥等初始化 client，并使它具有自动定时获取微信支付平台证书的能力
+	opts := []core.ClientOption{
+		option.WithWechatPayAutoAuthCipher(conf.Conf.MchID, conf.Conf.MchCertificateSerialNumber, mchPrivateKey, conf.Conf.MchAPIv3Key),
+	}
+	client, err := core.NewClient(ctx, opts...)
+	if err != nil {
+		log.Fatalf("new wechat pay client err:%s", err)
+	}
+
+	// 发送请求，以下载微信支付平台证书为例
+	// https://pay.weixin.qq.com/wiki/doc/apiv3/wechatpay/wechatpay5_1.shtml
+	svc := certificates.CertificatesApiService{Client: client}
+	resp, result, err := svc.DownloadCertificates(ctx)
+	log.Printf("status=%d resp=%s", result.Response.StatusCode, resp)
+	return resp
+}
+
+type RefundReq struct {
+	OutRefundNo string  `json:"out_refund_no"`
+	OutTradeNo  string  `json:"out_trade_no"`
+	Amount      Amount1 `json:"amount"`
+}
+
+type Amount1 struct {
 	Refund   int    `json:"refund"`
 	Total    int    `json:"total"`
 	Currency string `json:"currency"`
@@ -195,13 +327,13 @@ func RefundPay(req *RefundReq) (resp *RefundResp, result *core.APIResult, err er
 	ctx := context.Background()
 
 	// 使用 utils 提供的函数从本地文件中加载商户私钥，商户私钥会用来生成请求的签名
-	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(clientKeyPath)
+	mchPrivateKey, err := utils.LoadPrivateKeyWithPath(conf.Conf.ClientKeyPath)
 	if err != nil {
 		log.Print("load merchant private key error")
 	}
 
 	opts := []core.ClientOption{
-		option.WithWechatPayAutoAuthCipher(mchID, mchCertificateSerialNumber, mchPrivateKey, mchAPIv3Key),
+		option.WithWechatPayAutoAuthCipher(conf.Conf.MchID, conf.Conf.MchCertificateSerialNumber, mchPrivateKey, conf.Conf.MchAPIv3Key),
 	}
 
 	localVarPath := consts.WechatPayAPIServer + "/v3/refund/domestic/refunds"
