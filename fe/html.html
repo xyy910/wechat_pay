@@ -4,10 +4,10 @@
     <meta charset="UTF-8">
     <title>订单支付二维码</title>
 </head>
-<script src="static/qrcode.min.js"></script>
+<script src="/static/qrcode.min.js"></script>
 <body>
 
-<div id="qrcode"></div>
+<div id="qrcode">订单号：{{.trade_no}}</div>
 <script type="text/javascript">
     let url = {{.code_url}}
     new QRCode(document.getElementById("qrcode"), url);  // 设置要生成二维码的链接
